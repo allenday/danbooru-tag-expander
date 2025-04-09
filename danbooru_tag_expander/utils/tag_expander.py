@@ -21,7 +21,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Default cache location
-DEFAULT_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".danbooru_tools", "cache")
+DEFAULT_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".danbooru_tag_expander", "cache")
 
 
 class TagExpander:

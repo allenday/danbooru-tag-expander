@@ -10,13 +10,13 @@ import sys
 import logging
 from typing import List
 from dotenv import load_dotenv
-from danbooru_tools.utils.tag_expander import TagExpander
+from danbooru_tag_expander.utils.tag_expander import TagExpander
 
 # Load environment variables
 load_dotenv()
 
 # Configure logger
-logger = logging.getLogger("danbooru_tools")
+logger = logging.getLogger("danbooru_tag_expander")
 
 
 def setup_logging(log_level):
