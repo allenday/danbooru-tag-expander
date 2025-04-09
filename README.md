@@ -10,6 +10,40 @@ A Python tool for expanding Danbooru tags with their implications and aliases. T
 - Progress tracking and detailed logging
 - Caching support for better performance
 
+## Graph Theory Concepts
+
+The tag expansion system can be understood through graph theory:
+
+### Tag Graph Structure
+- Tags are nodes in a directed graph
+- Two types of edges exist:
+  1. Implications: Directed edges between different concepts (A → B means "A implies B")
+  2. Aliases: Form equivalence classes (subgraphs) where all nodes represent the same concept
+
+### Frequency Calculation
+- For implications:
+  - Multiple implications to the same tag sum their frequencies
+  - Example: If A implies X and B implies X, then freq(X) = freq(A) + freq(B)
+- For aliases:
+  - All nodes in an alias subgraph share the same frequency
+  - Example: If X and Y are aliases, then freq(X) = freq(Y) = total frequency of their concept
+  - This reflects that aliases are different names for the same underlying concept
+
+### Example
+```
+Given:
+- Tags: [cat, feline, kitten]
+- Aliases: cat ↔ feline (they're the same concept)
+- Implications: kitten → cat
+
+Results:
+- Expanded tags: [cat, feline, kitten]
+- Frequencies:
+  - cat: 2 (1 from original + 1 from kitten implication)
+  - feline: 2 (same as cat since they're aliases)
+  - kitten: 1 (from original tag)
+```
+
 ## Installation
 
 You can install the package using pip:

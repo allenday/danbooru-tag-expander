@@ -260,8 +260,16 @@ class TagExpander:
     def expand_tags(self, tags: List[str]) -> Tuple[Set[str], Counter]:
         """Expand a set of tags with their implications and aliases.
         
-        Performs full transitive closure of implications to find all
-        implied tags, no matter how deeply nested.
+        In graph theory terms:
+        - Tags form nodes in a directed graph
+        - Implications form directed edges between different concepts (A implies B)
+        - Aliases form equivalence classes (subgraphs) where all nodes represent the same concept
+        
+        Frequency calculation:
+        - For implications: frequencies sum across different source implications
+          (if A implies X and B implies X, then freq(X) = freq(A) + freq(B))
+        - For aliases: all nodes in an alias subgraph share the same frequency
+          (if X and Y are aliases, then freq(X) = freq(Y) = total frequency of the concept)
         
         Args:
             tags: A list of initial tags to expand
@@ -354,11 +362,24 @@ class TagExpander:
         for implied_tag, sources in implication_sources.items():
             frequency[implied_tag] += len(sources)
         
-        # Count aliases (frequency = source tag's frequency for each source)
+        # Process aliases (all members of an alias subgraph share the same frequency)
+        alias_groups = {}  # Maps canonical tag -> set of aliases (including canonical)
+        
+        # First, group aliases together
         for alias, sources in alias_sources.items():
-            for source_tag in sources:
-                # Add the source tag's frequency to the alias's frequency
-                frequency[alias] += frequency[source_tag]
+            # Use the first source as the canonical tag for this group
+            canonical = next(iter(sources))
+            if canonical not in alias_groups:
+                alias_groups[canonical] = {canonical}
+            alias_groups[canonical].add(alias)
+            
+        # Then ensure all aliases in a group share the same frequency
+        for canonical, aliases in alias_groups.items():
+            # Sum up all frequencies in the group
+            group_freq = sum(frequency[tag] for tag in aliases)
+            # Distribute evenly to all members
+            for alias in aliases:
+                frequency[alias] = group_freq
         
         self._log(f"Expanded {len(tags)} tags to {len(final_expanded_set)} tags")
         return final_expanded_set, frequency 
