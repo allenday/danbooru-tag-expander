@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from collections import Counter
-from danbooru_tools.utils.tag_expander import TagExpander
+from danbooru_tag_expander.utils.tag_expander import TagExpander
 
 
 class TestTagExpander(unittest.TestCase):
@@ -15,19 +15,17 @@ class TestTagExpander(unittest.TestCase):
         self.mock_client = MagicMock()
         
         # Create a TagExpander with the mock client
-        with patch('danbooru_tools.utils.tag_expander.Danbooru', return_value=self.mock_client):
+        with patch('danbooru_tag_expander.utils.tag_expander.Danbooru', return_value=self.mock_client):
             self.expander = TagExpander(username="test", api_key="test", use_cache=False)
-        
-        # Replace the client with our mock
-        self.expander.client = self.mock_client
 
     def test_get_tag_implications(self):
         """Test the get_tag_implications method."""
         # Set up the mock response
-        self.mock_client._get.return_value = [
+        mock_response = [
             {"antecedent_name": "test_tag", "consequent_name": "implied_tag1"},
             {"antecedent_name": "test_tag", "consequent_name": "implied_tag2"}
         ]
+        self.mock_client._get.return_value = mock_response
         
         # Call the method
         implications = self.expander.get_tag_implications("test_tag")
@@ -43,10 +41,11 @@ class TestTagExpander(unittest.TestCase):
     def test_get_tag_aliases(self):
         """Test the get_tag_aliases method."""
         # Set up the mock response
-        self.mock_client._get.return_value = [
+        mock_response = [
             {"antecedent_name": "test_tag", "consequent_name": "alias_tag1"},
             {"antecedent_name": "test_tag", "consequent_name": "alias_tag2"}
         ]
+        self.mock_client._get.return_value = mock_response
         
         # Call the method
         aliases = self.expander.get_tag_aliases("test_tag")

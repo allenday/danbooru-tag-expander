@@ -41,7 +41,7 @@ danbooru-tag-expander --tags "1girl" --log-level DEBUG
 ### Python API
 
 ```python
-from danbooru_tools.tag_expander import TagExpander
+from danbooru_tag_expander.tag_expander import TagExpander
 
 # Create an expander instance
 expander = TagExpander(

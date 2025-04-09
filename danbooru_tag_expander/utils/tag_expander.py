@@ -123,30 +123,12 @@ class TagExpander:
         # Update last request time
         self._last_request_time = time.time()
         
-        # Build the URL
-        url = f"{self.site_url}/{endpoint}.json"
-        auth = None
-        
-        if self.username and self.api_key:
-            auth = (self.username, self.api_key)
-        
         try:
             self._log(f"Requesting {endpoint} for params {params}...")
-            response = requests.get(url, params=params, auth=auth)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP Error: {e}")
-            if response.status_code == 429:  # Too Many Requests
-                logger.warning("Rate limit exceeded. Waiting 10 seconds...")
-                time.sleep(10)
-                return self._api_request(endpoint, params)  # Retry the request
-            return []
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request Error: {e}")
-            return []
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON Error: {e}")
+            response = self.client._get(endpoint, params)
+            return response
+        except Exception as e:
+            logger.error(f"Error: {e}")
             return []
 
     def get_tag_implications(self, tag: str) -> List[str]:
