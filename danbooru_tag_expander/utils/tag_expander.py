@@ -20,10 +20,6 @@ load_dotenv()
 # Configure logger
 logger = logging.getLogger(__name__)
 
-# Default cache location
-DEFAULT_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".danbooru_tag_expander", "cache")
-
-
 class TagExpander:
     """A utility for expanding Danbooru tags with their implications and aliases."""
 
@@ -43,9 +39,9 @@ class TagExpander:
             api_key: Danbooru API key. If None, uses DANBOORU_API_KEY from .env
             site_url: Danbooru site URL. If None, uses DANBOORU_SITE_URL from .env 
                       or the official Danbooru site
-            use_cache: Whether to cache API responses
-            cache_dir: Directory for cache. If None, uses CACHE_DIR from .env
-                      or a default location
+            use_cache: Whether to cache API responses. Will be set to False if no cache_dir is configured
+            cache_dir: Directory for cache. If None, uses DANBOORU_CACHE_DIR from .env.
+                      If no cache directory is configured, caching will be disabled.
             request_delay: Seconds to wait between API requests
             verbose: Whether to log verbose output
             log_level: Log level to use
@@ -65,10 +61,18 @@ class TagExpander:
                                api_key=self.api_key)
 
         # Set up caching
-        self.use_cache = use_cache
-        self.cache_dir = cache_dir or os.getenv("CACHE_DIR") or DEFAULT_CACHE_DIR
-        if self.use_cache and not os.path.exists(self.cache_dir):
+        self.cache_dir = cache_dir or os.getenv("DANBOORU_CACHE_DIR")
+        # Only enable caching if a cache directory is configured
+        self.use_cache = use_cache and self.cache_dir is not None
+        if self.use_cache:
             os.makedirs(self.cache_dir, exist_ok=True)
+            if verbose:
+                logger.info(f"Caching enabled. Using directory: {self.cache_dir}")
+        elif verbose:
+            if not use_cache:
+                logger.info("Caching disabled by configuration")
+            else:
+                logger.info("Caching disabled: no cache directory configured")
 
         # Cache for API responses to reduce API calls
         self._implications_cache = {}
@@ -125,10 +129,14 @@ class TagExpander:
         
         try:
             self._log(f"Requesting {endpoint} for params {params}...")
-            response = self.client._get(endpoint, params)
-            return response
+            raw_response = self.client._get(endpoint, params)
+            if self.verbose:
+                print(f"Raw API response: {raw_response}")
+            return raw_response
         except Exception as e:
             logger.error(f"Error: {e}")
+            if self.verbose:
+                logger.error(f"Full error details: {str(e)}")
             return []
 
     def get_tag_implications(self, tag: str) -> List[str]:
@@ -161,14 +169,15 @@ class TagExpander:
         # Query the API
         implications = []
         try:
-            # Query for tag implications
+            # Query for direct tag implications
             params = {"search[antecedent_name]": tag}
-            response = self._api_request("tag_implications", params)
+            response = self._api_request("tag_implications.json", params)
             
-            # Extract the consequent tags (the implied tags)
-            for item in response:
-                if "consequent_name" in item:
-                    implications.append(item["consequent_name"])
+            if response and isinstance(response, list):
+                # Extract the consequent tags (the implied tags)
+                for implication in response:
+                    if "consequent_name" in implication and implication.get("status") == "active":
+                        implications.append(implication["consequent_name"])
             
             self._log(f"Found {len(implications)} implications for '{tag}'")
         except Exception as e:
@@ -196,7 +205,7 @@ class TagExpander:
             tag: The tag to find aliases for
             
         Returns:
-            A list of tag aliases
+            A list of tag aliases (antecedent names)
         """
         # Check cache first
         if tag in self._aliases_cache:
@@ -219,14 +228,15 @@ class TagExpander:
         # Query the API
         aliases = []
         try:
-            # Query for tag aliases
-            params = {"search[antecedent_name]": tag}
-            response = self._api_request("tag_aliases", params)
+            # Query for tag aliases using the tags endpoint
+            params = {"search[name_matches]": tag, "only": "name,consequent_aliases"}
+            response = self._api_request("tags.json", params)
             
-            # Extract the consequent tags (the alias targets)
-            for item in response:
-                if "consequent_name" in item:
-                    aliases.append(item["consequent_name"])
+            if response and isinstance(response, list) and len(response) > 0:
+                # Extract aliases from consequent_aliases field
+                alias_dicts = response[0].get("consequent_aliases", [])
+                # Extract just the antecedent_name from each alias
+                aliases = [alias["antecedent_name"] for alias in alias_dicts if alias.get("status") == "active"]
             
             self._log(f"Found {len(aliases)} aliases for '{tag}'")
         except Exception as e:
@@ -344,9 +354,11 @@ class TagExpander:
         for implied_tag, sources in implication_sources.items():
             frequency[implied_tag] += len(sources)
         
-        # Count aliases (frequency = number of sources)
+        # Count aliases (frequency = source tag's frequency for each source)
         for alias, sources in alias_sources.items():
-            frequency[alias] += len(sources)
+            for source_tag in sources:
+                # Add the source tag's frequency to the alias's frequency
+                frequency[alias] += frequency[source_tag]
         
         self._log(f"Expanded {len(tags)} tags to {len(final_expanded_set)} tags")
         return final_expanded_set, frequency 

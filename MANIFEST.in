@@ -1,0 +1,7 @@
+include LICENSE
+include README.md
+include requirements.txt
+include .env.example
+recursive-include danbooru_tag_expander *.py
+recursive-include danbooru_tag_expander *.pyi
+recursive-include danbooru_tag_expander py.typed 

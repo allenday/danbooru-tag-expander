@@ -188,3 +188,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# IDE
+.cursor/
+
+# Temporary files
+test_api.py
+tmp.txt
