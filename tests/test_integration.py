@@ -4,7 +4,8 @@ from danbooru_tag_expander.utils.tag_expander import TagExpander
 class TestTagExpander(unittest.TestCase):
     def setUp(self):
         """Set up a TagExpander instance for each test"""
-        self.expander = TagExpander(verbose=True, use_cache=False)
+        # Initialize with credentials from environment, disable cache for integration tests
+        self.expander = TagExpander(use_cache=False)
 
     def test_tag_implications(self):
         """Test that tag implications are correctly retrieved"""

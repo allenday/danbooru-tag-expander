@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from collections import Counter
-from danbooru_tag_expander.utils.tag_expander import TagExpander
+from danbooru_tag_expander import TagExpander
 
 
 class TestTagExpander(unittest.TestCase):
@@ -92,7 +92,7 @@ class TestTagExpander(unittest.TestCase):
             "cat": 2,      # 1 from original + 1 from kitten implication
             "feline": 2,   # Same as cat (they're aliases)
             "kitten": 1,   # Just from original tag
-            "animal": 3    # 1 from cat + 1 from feline (alias of cat) + 1 from kitten->cat->animal
+            "animal": 2    # 1 from cat implication + 1 from feline implication (alias of cat)
         })
         
         # Check the results

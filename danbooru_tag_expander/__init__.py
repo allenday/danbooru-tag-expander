@@ -1,3 +1,16 @@
-"""Danbooru Tools - Utilities for working with Danbooru."""
+"""Danbooru Tag Expander Package."""
 
-__version__ = "0.1.4" 
+import logging
+
+__version__ = "0.1.5" 
+
+# Define the package logger and add a NullHandler
+# This prevents 'No handler found' warnings if the library is used
+# by an application that doesn't configure logging.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+
+# Import the main class to make it available at the package level
+from .utils.tag_expander import TagExpander 
+
+# Define __all__ to control imports with '*', making TagExpander public
+__all__ = ["TagExpander"]

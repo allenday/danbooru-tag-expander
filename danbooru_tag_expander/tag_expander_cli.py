@@ -10,7 +10,7 @@ import sys
 import logging
 from typing import List
 from dotenv import load_dotenv
-from danbooru_tag_expander.utils.tag_expander import TagExpander
+from danbooru_tag_expander import TagExpander
 
 # Load environment variables
 load_dotenv()
@@ -24,7 +24,7 @@ def setup_logging(log_level):
     # Create stderr handler
     handler = logging.StreamHandler(sys.stderr)
     
-    # Set level
+    # Set level for both logger and handler
     logger.setLevel(log_level)
     handler.setLevel(log_level)
     
@@ -32,9 +32,10 @@ def setup_logging(log_level):
     formatter = logging.Formatter('%(levelname)s: %(message)s')
     handler.setFormatter(formatter)
     
-    # Add handler to logger if not already present
-    if not logger.handlers:
-        logger.addHandler(handler)
+    # Remove existing handlers and add the new one to ensure clean setup
+    # This prevents duplicate messages if this function is called multiple times
+    # or if a handler was added elsewhere.
+    logger.handlers = [handler]
 
 
 def parse_args():
@@ -142,8 +143,6 @@ def expand_tags(tags: List[str], args) -> None:
         use_cache=not args.no_cache,
         cache_dir=args.cache_dir,
         request_delay=args.delay,
-        verbose=not args.quiet,
-        log_level=getattr(logging, args.log_level)
     )
     
     logger.info(f"Expanding {len(tags)} tags...")

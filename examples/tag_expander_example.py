@@ -11,7 +11,7 @@ load_dotenv()
 username = os.getenv("DANBOORU_USERNAME")
 api_key = os.getenv("DANBOORU_API_KEY")
 
-from danbooru_tag_expander.utils.tag_expander import TagExpander
+from danbooru_tag_expander import TagExpander
 
 def main():
     """Run the example."""
