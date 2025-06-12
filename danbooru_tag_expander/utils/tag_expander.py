@@ -13,6 +13,7 @@ from collections import Counter, defaultdict, deque
 from typing import Dict, List, Set, Tuple
 from pybooru import Danbooru
 from dotenv import load_dotenv
+import urllib.parse
 
 # Load environment variables from .env file
 load_dotenv()
@@ -107,6 +108,56 @@ class TagExpander:
             logger.exception(f"Full error details during API request to {endpoint}:") # Use exception to include traceback
             return []
 
+    def _get_safe_cache_filename(self, prefix: str, tag: str) -> str:
+        """Generate a safe cache filename for a tag.
+        
+        Uses URL encoding to handle problematic characters like '/', '?', ':', etc.
+        that cannot be used in filenames across different operating systems.
+        
+        Args:
+            prefix: The cache type prefix (e.g., 'implications', 'aliases')
+            tag: The tag name to encode
+            
+        Returns:
+            A safe filename for use in the cache directory
+            
+        Examples:
+            _get_safe_cache_filename('implications', 'aqua/gloves') 
+            -> 'implications_aqua%2Fgloves.json'
+        """
+        # URL encode the tag to handle special characters
+        encoded_tag = urllib.parse.quote(tag, safe='')
+        return f"{prefix}_{encoded_tag}.json"
+
+    def is_tag_deprecated(self, tag: str) -> bool:
+        """Check if a tag is deprecated.
+        
+        Args:
+            tag: The tag to check
+            
+        Returns:
+            True if the tag is deprecated, False otherwise
+        """
+        try:
+            # Query the tags endpoint to get tag information
+            params = {"search[name]": tag, "only": "name,is_deprecated"}
+            response = self._api_request("tags.json", params)
+            
+            if response and isinstance(response, list) and len(response) > 0:
+                tag_info = response[0]
+                is_deprecated = tag_info.get("is_deprecated", False)
+                logger.debug(f"Tag '{tag}' deprecated status: {is_deprecated}")
+                return is_deprecated
+            else:
+                # If tag not found, consider it as non-existent (not deprecated but also not valid)
+                logger.debug(f"Tag '{tag}' not found in API response")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error checking if tag '{tag}' is deprecated: {e}")
+            # If we can't check, assume it's not deprecated to avoid filtering valid tags
+            return False
+
     def get_tag_implications(self, tag: str) -> List[str]:
         """Get all tag implications for a given tag.
         
@@ -114,8 +165,13 @@ class TagExpander:
             tag: The tag to find implications for
             
         Returns:
-            A list of implied tags
+            A list of implied tags (excluding deprecated tags)
         """
+        # Check if the tag itself is deprecated first
+        if self.is_tag_deprecated(tag):
+            logger.debug(f"Skipping implications for deprecated tag: {tag}")
+            return []
+        
         # Check cache first
         if tag in self._implications_cache:
             logger.debug(f"Using cached implications for '{tag}'")
@@ -123,7 +179,7 @@ class TagExpander:
         
         # Check disk cache if enabled
         if self.use_cache:
-            cache_file = os.path.join(self.cache_dir, f"implications_{tag}.json")
+            cache_file = os.path.join(self.cache_dir, self._get_safe_cache_filename('implications', tag))
             if os.path.exists(cache_file):
                 try:
                     with open(cache_file, 'r') as f:
@@ -145,9 +201,14 @@ class TagExpander:
                 # Extract the consequent tags (the implied tags)
                 for implication in response:
                     if "consequent_name" in implication and implication.get("status") == "active":
-                        implications.append(implication["consequent_name"])
+                        consequent_tag = implication["consequent_name"]
+                        # Skip implications to deprecated tags
+                        if not self.is_tag_deprecated(consequent_tag):
+                            implications.append(consequent_tag)
+                        else:
+                            logger.debug(f"Skipping implication to deprecated tag: {consequent_tag}")
             
-            logger.debug(f"Found {len(implications)} implications for '{tag}'")
+            logger.debug(f"Found {len(implications)} valid implications for '{tag}'")
         except Exception as e:
             logger.error(f"Error getting implications for tag '{tag}': {e}")
         
@@ -157,7 +218,7 @@ class TagExpander:
         # Save to disk cache if enabled
         if self.use_cache:
             try:
-                cache_file = os.path.join(self.cache_dir, f"implications_{tag}.json")
+                cache_file = os.path.join(self.cache_dir, self._get_safe_cache_filename('implications', tag))
                 with open(cache_file, 'w') as f:
                     json.dump(implications, f)
                 logger.debug(f"Saved implications for '{tag}' to disk cache")
@@ -173,8 +234,13 @@ class TagExpander:
             tag: The tag to find aliases for
             
         Returns:
-            A list of tag aliases (antecedent names)
+            A list of tag aliases (antecedent names, excluding deprecated tags)
         """
+        # Check if the tag itself is deprecated first
+        if self.is_tag_deprecated(tag):
+            logger.debug(f"Skipping aliases for deprecated tag: {tag}")
+            return []
+        
         # Check cache first
         if tag in self._aliases_cache:
             logger.debug(f"Using cached aliases for '{tag}'")
@@ -182,7 +248,7 @@ class TagExpander:
         
         # Check disk cache if enabled
         if self.use_cache:
-            cache_file = os.path.join(self.cache_dir, f"aliases_{tag}.json")
+            cache_file = os.path.join(self.cache_dir, self._get_safe_cache_filename('aliases', tag))
             if os.path.exists(cache_file):
                 try:
                     with open(cache_file, 'r') as f:
@@ -203,10 +269,17 @@ class TagExpander:
             if response and isinstance(response, list) and len(response) > 0:
                 # Extract aliases from consequent_aliases field
                 alias_dicts = response[0].get("consequent_aliases", [])
-                # Extract just the antecedent_name from each alias
-                aliases = [alias["antecedent_name"] for alias in alias_dicts if alias.get("status") == "active"]
+                # Extract just the antecedent_name from each alias, but filter out deprecated ones
+                for alias in alias_dicts:
+                    if alias.get("status") == "active":
+                        alias_name = alias["antecedent_name"]
+                        # Skip deprecated aliases
+                        if not self.is_tag_deprecated(alias_name):
+                            aliases.append(alias_name)
+                        else:
+                            logger.debug(f"Skipping deprecated alias: {alias_name}")
             
-            logger.debug(f"Found {len(aliases)} aliases for '{tag}'")
+            logger.debug(f"Found {len(aliases)} valid aliases for '{tag}'")
         except Exception as e:
             logger.error(f"Error getting aliases for tag '{tag}': {e}")
         
@@ -216,7 +289,7 @@ class TagExpander:
         # Save to disk cache if enabled
         if self.use_cache:
             try:
-                cache_file = os.path.join(self.cache_dir, f"aliases_{tag}.json")
+                cache_file = os.path.join(self.cache_dir, self._get_safe_cache_filename('aliases', tag))
                 with open(cache_file, 'w') as f:
                     json.dump(aliases, f)
                 logger.debug(f"Saved aliases for '{tag}' to disk cache")
@@ -243,8 +316,23 @@ class TagExpander:
             - The final expanded set of tags (with implications and aliases)
             - A Counter with the frequency of each tag in the final set
         """
+        # Filter out deprecated tags from the initial input
+        valid_tags = []
+        for tag in tags:
+            if not self.is_tag_deprecated(tag):
+                valid_tags.append(tag)
+            else:
+                logger.info(f"Skipping deprecated input tag: {tag}")
+        
+        if not valid_tags:
+            logger.warning("All input tags are deprecated. Returning empty result.")
+            return set(), Counter()
+        
+        if len(valid_tags) != len(tags):
+            logger.info(f"Filtered out {len(tags) - len(valid_tags)} deprecated tags from input")
+        
         # --- 1. Initial Expansion (Implications) ---
-        original_tags = set(tags)
+        original_tags = set(valid_tags)
         implication_queue = deque(original_tags)
         processed_implications = set()
         expanded_set = set(original_tags)
@@ -297,7 +385,6 @@ class TagExpander:
                      # Also need to check its aliases
                      if alias not in processed_aliases:
                           alias_queue.append(alias)
-
 
         # Re-run implication expansion if new tags were added via aliases
         if implication_queue:
