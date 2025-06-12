@@ -92,6 +92,39 @@ print(f"Original tags: 1girl, solo")
 print(f"Expanded tags: {', '.join(expanded_tags)}")
 ```
 
+### Advanced Usage: External Graph Injection
+
+For advanced use cases, you can inject an external `DanbooruTagGraph` instance from the separate [`danbooru-tag-graph`](https://pypi.org/project/danbooru-tag-graph/) package:
+
+```python
+from danbooru_tag_expander.tag_expander import TagExpander
+from danbooru_tag_graph import DanbooruTagGraph
+
+# Create and populate an external graph
+graph = DanbooruTagGraph()
+graph.add_tag("cat", fetched=True)
+graph.add_tag("animal", fetched=True)
+graph.add_implication("cat", "animal")
+
+# Use the external graph
+expander = TagExpander(
+    username="your-username",
+    api_key="your-api-key",
+    tag_graph=graph  # Inject external graph
+)
+
+# This will use the pre-populated graph data
+expanded_tags, frequencies = expander.expand_tags(["cat"])
+```
+
+This approach is useful for:
+- Pre-loading tag relationships from external sources
+- Sharing graph instances between multiple expanders
+- Custom caching strategies
+- Integration with external tag management systems
+
+The [`danbooru-tag-graph`](https://pypi.org/project/danbooru-tag-graph/) package can also be used independently for graph-based tag relationship management.
+
 ## Configuration
 
 The tool can be configured using environment variables or command-line arguments:
