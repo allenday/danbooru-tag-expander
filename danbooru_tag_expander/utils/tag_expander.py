@@ -151,36 +151,36 @@ class TagExpander:
         if not self.tag_graph:
             raise RuntimeError("Graph cache is not enabled. Cannot expand tags without cache.")
         
-        logger.info(f"Expanding {len(tags)} tags using graph cache...")
+        logger.info(f"Expanding {len(tags)} tags using thread-safe graph cache...")
         
-        # Ensure all required tags are fetched
-        self._ensure_tags_fetched(tags)
+        # Ensure all required tags are fetched (thread-safe)
+        self._ensure_all_tags_fetched(tags)
         
-        # Use graph for expansion
+        # Use thread-safe graph expansion
         expanded_tags, frequencies = self.tag_graph.expand_tags(tags, include_deprecated=False)
         
-        logger.info(f"Expanded {len(tags)} tags to {len(expanded_tags)} tags using graph cache")
+        logger.info(f"Expanded {len(tags)} tags to {len(expanded_tags)} tags")
         return expanded_tags, Counter(frequencies)
     
-    def _ensure_tags_fetched(self, initial_tags: List[str]) -> None:
-        """Ensure all tags and their transitive relationships are fetched."""
+    def _ensure_all_tags_fetched(self, initial_tags: List[str]) -> None:
+        """Ensure all tags and their transitive relationships are fetched (simplified)."""
         to_process = set(initial_tags)
         
         while to_process:
-            # Get unfetched tags from current batch
+            # Thread-safe check for unfetched tags
             unfetched = self.tag_graph.get_unfetched_tags(list(to_process))
             
             if unfetched:
                 logger.debug(f"Fetching data for {len(unfetched)} unfetched tags...")
-                newly_discovered = self._fetch_and_populate_tags(unfetched)
+                newly_discovered = self._batch_fetch_tags(unfetched)
                 to_process.update(newly_discovered)
+                # Thread-safe auto-save
                 self.tag_graph.auto_save()
-            
-            # Remove processed tags
-            to_process -= set(unfetched) if unfetched else to_process
+            else:
+                break
     
-    def _fetch_and_populate_tags(self, tags: List[str]) -> Set[str]:
-        """Fetch and populate tag data, returning newly discovered tags."""
+    def _batch_fetch_tags(self, tags: List[str]) -> Set[str]:
+        """Batch fetch and populate tag data (simplified with thread-safe operations)."""
         newly_discovered = set()
         
         for tag in tags:
@@ -194,8 +194,8 @@ class TagExpander:
                 implications = self._fetch_tag_implications(tag)
                 aliases = self._fetch_tag_aliases(tag)
                 
-                # Add to graph with fetched=True
-                self.tag_graph.add_tag(tag, is_deprecated=is_deprecated, fetched=True)
+                # Thread-safe graph operations
+                self.tag_graph.add_tag(tag, is_deprecated=False, fetched=True)
                 
                 for implied_tag in implications:
                     self.tag_graph.add_implication(tag, implied_tag)
@@ -205,7 +205,7 @@ class TagExpander:
                     self.tag_graph.add_alias(tag, alias_tag)
                     newly_discovered.add(alias_tag)
             else:
-                # Just add the deprecated tag as fetched
+                # Thread-safe add deprecated tag
                 self.tag_graph.add_tag(tag, is_deprecated=True, fetched=True)
         
         return newly_discovered
