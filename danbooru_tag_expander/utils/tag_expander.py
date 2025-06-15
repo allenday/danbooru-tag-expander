@@ -217,6 +217,9 @@ class TagExpander:
                     raise
             else:
                 break
+        
+        # CRITICAL: Validate and fix any bidirectional alias issues after processing
+        self._validate_alias_directionality()
     
     def _batch_fetch_tags(self, tags: List[str]) -> Set[str]:
         """Batch fetch and populate tag data (simplified with thread-safe operations).
@@ -245,11 +248,21 @@ class TagExpander:
                         self.tag_graph.add_implication(tag, implied_tag)
                         newly_discovered.add(implied_tag)
                     
+                    # CRITICAL FIX: Only add alias if this tag is actually an antecedent
+                    # The _fetch_tag_aliases method already filters for antecedent relationships,
+                    # but we need to ensure we're not creating bidirectional relationships
                     for alias_tag in aliases:
                         # Add directed alias relationship: tag (antecedent) -> alias_tag (consequent)
                         # This means 'tag' is deprecated and redirects to 'alias_tag'
+                        logger.debug(f"Adding directed alias: {tag} -> {alias_tag}")
                         self.tag_graph.add_alias(tag, alias_tag)
                         newly_discovered.add(alias_tag)
+                        
+                        # CRITICAL: Ensure the consequent tag is also marked as fetched
+                        # but do NOT fetch its aliases to avoid bidirectional creation
+                        if not self.tag_graph.is_tag_fetched(alias_tag):
+                            logger.debug(f"Marking consequent tag as fetched: {alias_tag}")
+                            self.tag_graph.add_tag(alias_tag, is_deprecated=False, fetched=True)
                 else:
                     # Thread-safe add deprecated tag
                     self.tag_graph.add_tag(tag, is_deprecated=True, fetched=True)
@@ -316,23 +329,37 @@ class TagExpander:
         Gets the outgoing aliases for a tag (antecedent -> consequent).
         If this tag is an antecedent, returns the consequent tags it aliases to.
         
+        IMPORTANT: This method only returns aliases where the given tag is the ANTECEDENT.
+        It will NOT return bidirectional relationships.
+        
         Raises:
             RateLimitError: When rate limit is exceeded
         """
         aliases = []
         try:
             # Use tag_aliases.json to get directed alias relationships
-            # This gets aliases WHERE this tag is the antecedent
+            # This gets aliases WHERE this tag is the antecedent (deprecated tag)
             params = {"search[antecedent_name]": tag}
             response = self._api_request("tag_aliases.json", params)
+            
+            logger.debug(f"API response for aliases of '{tag}': {response}")
             
             if response and isinstance(response, list):
                 for alias_data in response:
                     if alias_data.get("status") == "active" and "consequent_name" in alias_data:
                         consequent_tag = alias_data["consequent_name"]
-                        # Only add if consequent is not deprecated
-                        if not self._fetch_tag_deprecated_status(consequent_tag):
-                            aliases.append(consequent_tag)
+                        antecedent_tag = alias_data.get("antecedent_name")
+                        
+                        # Double-check that we have the correct directional relationship
+                        if antecedent_tag == tag:
+                            # Only add if consequent is not deprecated
+                            if not self._fetch_tag_deprecated_status(consequent_tag):
+                                aliases.append(consequent_tag)
+                                logger.debug(f"Found valid directed alias: {tag} (antecedent) -> {consequent_tag} (consequent)")
+                            else:
+                                logger.debug(f"Skipping deprecated consequent: {consequent_tag}")
+                        else:
+                            logger.warning(f"Unexpected antecedent mismatch: expected {tag}, got {antecedent_tag}")
             
             logger.debug(f"Found {len(aliases)} outgoing aliases for '{tag}' (antecedent -> consequent)")
         except RateLimitError:
@@ -564,3 +591,89 @@ class TagExpander:
             raise RuntimeError("Graph cache is not enabled. Cannot check cache status without cache.")
         
         return self.tag_graph.is_tag_fetched(tag) 
+
+    def _validate_alias_directionality(self) -> None:
+        """Validate that alias relationships are properly directional and fix any bidirectional issues.
+        
+        This method checks for and fixes any bidirectional alias relationships that might have been
+        created incorrectly, ensuring that aliases are properly directional (antecedent -> consequent).
+        
+        When the API returns bidirectional relationships, this method uses heuristics to determine
+        the correct direction based on tag naming patterns and other factors.
+        """
+        if not self.tag_graph:
+            return
+            
+        logger.debug("Validating alias directionality...")
+        
+        # Get all alias edges
+        alias_edges = [(u, v) for u, v, data in self.tag_graph.graph.edges(data=True) 
+                       if data.get('edge_type') == 'alias']
+        
+        bidirectional_pairs = set()
+        
+        # Check for bidirectional alias relationships
+        for u, v in alias_edges:
+            if (v, u) in alias_edges:
+                # Add as a sorted tuple to avoid duplicates
+                pair = tuple(sorted([u, v]))
+                bidirectional_pairs.add(pair)
+                logger.warning(f"Found bidirectional alias relationship: {u} <-> {v}")
+        
+        # Fix bidirectional relationships
+        for pair in bidirectional_pairs:
+            u, v = pair
+            
+            # Determine which direction is correct based on canonical status first
+            u_canonical = self.tag_graph.is_canonical(u)
+            v_canonical = self.tag_graph.is_canonical(v)
+            
+            correct_direction = None
+            
+            if not u_canonical and v_canonical:
+                # u is deprecated, v is canonical: u -> v is correct
+                correct_direction = (u, v)
+                logger.info(f"Using canonical status: {u} (deprecated) -> {v} (canonical)")
+            elif u_canonical and not v_canonical:
+                # v is deprecated, u is canonical: v -> u is correct
+                correct_direction = (v, u)
+                logger.info(f"Using canonical status: {v} (deprecated) -> {u} (canonical)")
+            else:
+                # Both have same canonical status - use heuristics
+                logger.warning(f"Ambiguous bidirectional alias: {u} <-> {v} (both have same canonical status)")
+                
+                # Heuristic 1: Prefer the tag that looks more "canonical" (shorter, simpler)
+                if len(u) < len(v):
+                    correct_direction = (v, u)  # longer -> shorter
+                    logger.info(f"Using length heuristic: {v} (longer) -> {u} (shorter)")
+                elif len(v) < len(u):
+                    correct_direction = (u, v)  # longer -> shorter
+                    logger.info(f"Using length heuristic: {u} (longer) -> {v} (shorter)")
+                else:
+                    # Heuristic 2: Alphabetical order (more consistent)
+                    if u < v:
+                        correct_direction = (v, u)  # later -> earlier alphabetically
+                        logger.info(f"Using alphabetical heuristic: {v} -> {u}")
+                    else:
+                        correct_direction = (u, v)  # later -> earlier alphabetically
+                        logger.info(f"Using alphabetical heuristic: {u} -> {v}")
+            
+            if correct_direction:
+                antecedent, consequent = correct_direction
+                
+                # Remove both edges
+                if self.tag_graph.graph.has_edge(u, v):
+                    logger.info(f"Removing bidirectional edge: {u} -> {v}")
+                    self.tag_graph.graph.remove_edge(u, v)
+                if self.tag_graph.graph.has_edge(v, u):
+                    logger.info(f"Removing bidirectional edge: {v} -> {u}")
+                    self.tag_graph.graph.remove_edge(v, u)
+                
+                # Add the correct directional edge
+                logger.info(f"Adding correct directional alias: {antecedent} -> {consequent}")
+                self.tag_graph.add_alias(antecedent, consequent)
+        
+        if bidirectional_pairs:
+            logger.info(f"Fixed {len(bidirectional_pairs)} bidirectional alias relationships")
+        else:
+            logger.debug("No bidirectional alias issues found") 

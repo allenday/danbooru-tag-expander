@@ -2,7 +2,7 @@
 
 import logging
 
-__version__ = "0.2.4" 
+__version__ = "0.2.5" 
 
 # Define the package logger and add a NullHandler
 # This prevents 'No handler found' warnings if the library is used
