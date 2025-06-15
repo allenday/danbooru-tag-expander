@@ -6,10 +6,40 @@ A Python tool for expanding Danbooru tags with their implications and aliases. T
 
 - Expand tags with their implications and aliases
 - **High-performance semantic relationship methods** for efficient tag processing
+- **Correct directed alias handling** - aliases are treated as antecedent → consequent relationships
 - Support for both command-line and programmatic usage
 - Configurable output formats (text, JSON, CSV)
 - Progress tracking and detailed logging
 - Caching support for better performance
+
+## Important: Directed Alias Relationships
+
+**Fixed in v0.2.4**: Danbooru aliases are now correctly handled as **directed relationships** (antecedent → consequent) instead of bidirectional equivalences.
+
+### What Changed
+
+- **Before**: `get_aliases()` returned bidirectional relationships, treating deprecated and canonical tags as equivalent
+- **After**: `get_aliases()` returns only outgoing aliases (antecedent → consequent), correctly identifying deprecated tags
+
+### New API Methods
+
+```python
+# Get outgoing aliases (what this tag redirects to)
+canonical_tags = expander.get_aliases("ugly_man")  # ["ugly_bastard"]
+
+# Get incoming aliases (what tags redirect to this one)  
+deprecated_tags = expander.get_aliased_from("ugly_bastard")  # ["ugly_man"]
+
+# Check if a tag is canonical (preferred) vs deprecated
+is_preferred = expander.is_canonical("ugly_bastard")  # True
+is_deprecated = expander.is_canonical("ugly_man")     # False
+```
+
+### Impact on Applications
+
+- **Graph topology**: Now correctly shows directed alias edges instead of bidirectional
+- **Tag normalization**: Can distinguish canonical from deprecated tags
+- **Semantic analysis**: Proper sink/source node identification in graphs
 
 ## Performance Optimization
 
@@ -17,7 +47,7 @@ A Python tool for expanding Danbooru tags with their implications and aliases. T
 
 - **27,000+ tags/second** throughput for cached relationships
 - **No API calls** required for cached data
-- **Complete semantic relationships** including transitive implications and aliases
+- **Complete semantic relationships** including transitive implications and directed aliases
 - **Ideal for large-scale processing** of thousands of tags
 
 ## Graph Theory Concepts
