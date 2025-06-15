@@ -467,7 +467,7 @@ class TagExpander:
         
         return self.tag_graph.get_alias_group(tag, include_deprecated=include_deprecated)
     
-    def get_aliased_from(self, tag: str, include_deprecated: bool = False) -> List[str]:
+    def get_aliased_from(self, tag: str, include_deprecated: bool = True) -> List[str]:
         """Get tags that are aliased TO this tag (incoming aliases) from cached graph data.
         
         This method returns the deprecated/old tags that redirect to this canonical tag.
