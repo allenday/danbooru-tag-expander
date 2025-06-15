@@ -246,6 +246,8 @@ class TagExpander:
                         newly_discovered.add(implied_tag)
                     
                     for alias_tag in aliases:
+                        # Add directed alias relationship: tag (antecedent) -> alias_tag (consequent)
+                        # This means 'tag' is deprecated and redirects to 'alias_tag'
                         self.tag_graph.add_alias(tag, alias_tag)
                         newly_discovered.add(alias_tag)
                 else:
@@ -311,31 +313,35 @@ class TagExpander:
     def _fetch_tag_aliases(self, tag: str) -> List[str]:
         """Fetch aliases from API.
         
+        Gets the outgoing aliases for a tag (antecedent -> consequent).
+        If this tag is an antecedent, returns the consequent tags it aliases to.
+        
         Raises:
             RateLimitError: When rate limit is exceeded
         """
         aliases = []
         try:
-            params = {"search[name_matches]": tag, "only": "name,consequent_aliases"}
-            response = self._api_request("tags.json", params)
+            # Use tag_aliases.json to get directed alias relationships
+            # This gets aliases WHERE this tag is the antecedent
+            params = {"search[antecedent_name]": tag}
+            response = self._api_request("tag_aliases.json", params)
             
-            if response and isinstance(response, list) and len(response) > 0:
-                alias_dicts = response[0].get("consequent_aliases", [])
-                for alias in alias_dicts:
-                    if alias.get("status") == "active":
-                        alias_name = alias["antecedent_name"]
-                        # Only add if alias is not deprecated
-                        if not self._fetch_tag_deprecated_status(alias_name):
-                            aliases.append(alias_name)
+            if response and isinstance(response, list):
+                for alias_data in response:
+                    if alias_data.get("status") == "active" and "consequent_name" in alias_data:
+                        consequent_tag = alias_data["consequent_name"]
+                        # Only add if consequent is not deprecated
+                        if not self._fetch_tag_deprecated_status(consequent_tag):
+                            aliases.append(consequent_tag)
             
-            logger.debug(f"Found {len(aliases)} aliases for '{tag}'")
+            logger.debug(f"Found {len(aliases)} outgoing aliases for '{tag}' (antecedent -> consequent)")
         except RateLimitError:
             # Re-raise rate limit errors so they can be handled by caller
             raise
         except Exception as e:
             logger.error(f"Error getting aliases for tag '{tag}': {e}")
         
-        return aliases 
+        return aliases
 
     # High-performance semantic relationship methods
     # These methods provide fast access to cached relationships without full expansion overhead
@@ -388,17 +394,18 @@ class TagExpander:
         return self.tag_graph.get_transitive_implications(tag, include_deprecated=include_deprecated)
     
     def get_aliases(self, tag: str, include_deprecated: bool = False) -> List[str]:
-        """Get direct aliases for a tag from cached graph data.
+        """Get outgoing aliases for a tag from cached graph data (antecedent -> consequent).
         
-        This method returns the direct aliases of a tag. For all tags in the
-        same alias group (transitive aliases), use get_alias_group().
+        This method returns the canonical tags that this tag redirects to.
+        If this tag is deprecated/aliased, it returns the preferred tags to use instead.
+        For the reverse direction (what tags alias TO this tag), use get_aliased_from().
         
         Args:
-            tag: The tag to get aliases for
-            include_deprecated: Whether to include deprecated aliases
+            tag: The tag to get outgoing aliases for
+            include_deprecated: Whether to include deprecated consequent tags
             
         Returns:
-            List of alias tag names
+            List of consequent tag names (canonical targets this tag redirects to)
             
         Raises:
             RuntimeError: When graph cache is not enabled
@@ -433,11 +440,59 @@ class TagExpander:
         
         return self.tag_graph.get_alias_group(tag, include_deprecated=include_deprecated)
     
+    def get_aliased_from(self, tag: str, include_deprecated: bool = False) -> List[str]:
+        """Get tags that are aliased TO this tag (incoming aliases) from cached graph data.
+        
+        This method returns the deprecated/old tags that redirect to this canonical tag.
+        Useful for finding what tags have been aliased to a canonical tag.
+        
+        Performance: Uses cached graph traversal - no API calls required if
+        tag relationships are already cached.
+        
+        Args:
+            tag: The canonical tag to get incoming aliases for
+            include_deprecated: Whether to include deprecated antecedent tags
+            
+        Returns:
+            List of antecedent tag names (deprecated sources that redirect here)
+            
+        Raises:
+            RuntimeError: When graph cache is not enabled
+        """
+        if not self.tag_graph:
+            raise RuntimeError("Graph cache is not enabled. Cannot get aliased_from without cache.")
+        
+        return self.tag_graph.get_aliased_from(tag, include_deprecated=include_deprecated)
+    
+    def is_canonical(self, tag: str) -> bool:
+        """Check if a tag is canonical (not deprecated/aliased to another tag).
+        
+        A canonical tag is one that doesn't have outgoing alias edges, meaning
+        it's not deprecated or redirected to another tag. These are the preferred
+        tags that should be used in tagging.
+        
+        Performance: Uses cached graph lookup - no API calls required if
+        tag relationships are already cached.
+        
+        Args:
+            tag: The tag to check for canonical status
+            
+        Returns:
+            True if the tag is canonical (no outgoing aliases), False if deprecated
+            
+        Raises:
+            RuntimeError: When graph cache is not enabled
+        """
+        if not self.tag_graph:
+            raise RuntimeError("Graph cache is not enabled. Cannot check canonical status without cache.")
+        
+        return self.tag_graph.is_canonical(tag)
+    
     def get_semantic_relations(self, tag: str, include_deprecated: bool = False) -> dict:
         """Get complete semantic relationships for a tag from cached graph data.
         
         This method provides a comprehensive view of all semantic relationships
-        for a tag, including both direct and transitive implications and aliases.
+        for a tag, including both direct and transitive implications and directed aliases.
         
         Performance: Uses cached graph traversal - significantly faster than
         expand_tags() as it avoids API calls and frequency calculations.
@@ -450,8 +505,10 @@ class TagExpander:
             Dictionary containing:
             - 'direct_implications': List of directly implied tags
             - 'transitive_implications': Set of all transitively implied tags  
-            - 'direct_aliases': List of direct aliases
+            - 'direct_aliases': List of tags this tag aliases TO (outgoing: antecedent -> consequent)
+            - 'aliased_from': List of tags that alias TO this tag (incoming: antecedent -> consequent)
             - 'alias_group': Set of all tags in the same alias group
+            - 'is_canonical': Boolean indicating if this tag is canonical (not deprecated)
             - 'all_related': Set of all semantically related tags
             
         Raises:
@@ -463,12 +520,16 @@ class TagExpander:
         # Get all relationship types
         direct_implications = self.get_implications(tag, include_deprecated)
         transitive_implications = self.get_transitive_implications(tag, include_deprecated)
-        direct_aliases = self.get_aliases(tag, include_deprecated)
+        direct_aliases = self.get_aliases(tag, include_deprecated)  # Outgoing aliases (antecedent -> consequent)
+        aliased_from = self.get_aliased_from(tag, include_deprecated)  # Incoming aliases
         alias_group = self.get_alias_group(tag, include_deprecated)
+        is_canonical = self.is_canonical(tag)
         
         # Combine all related tags
         all_related = set()
         all_related.update(transitive_implications)
+        all_related.update(direct_aliases)  # Tags this tag redirects to
+        all_related.update(aliased_from)    # Tags that redirect to this tag
         all_related.update(alias_group)
         # Remove the original tag from all_related if it's in alias_group
         all_related.discard(tag)
@@ -477,7 +538,9 @@ class TagExpander:
             'direct_implications': direct_implications,
             'transitive_implications': transitive_implications,
             'direct_aliases': direct_aliases,
+            'aliased_from': aliased_from,
             'alias_group': alias_group,
+            'is_canonical': is_canonical,
             'all_related': all_related
         }
     

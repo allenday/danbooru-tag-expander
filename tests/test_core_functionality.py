@@ -78,30 +78,26 @@ class TestTagExpanderCore(unittest.TestCase):
                 return [{"name": tag_name, "is_deprecated": False}]
             elif endpoint == "tag_implications.json":
                 return []  # No implications for simplicity
-            elif endpoint == "tags.json" and "search[name_matches]" in params:
-                tag_name = params["search[name_matches]"]
-                if tag_name == "cat":
-                    return [{
-                        "name": "cat",
-                        "consequent_aliases": [
-                            {"antecedent_name": "feline", "status": "active"}
-                        ]
-                    }]
-                return [{"name": tag_name, "consequent_aliases": []}]
+            elif endpoint == "tag_aliases.json":
+                # Use correct directed alias API format
+                antecedent = params.get("search[antecedent_name]")
+                if antecedent == "feline":
+                    return [{"antecedent_name": "feline", "consequent_name": "cat", "status": "active"}]
+                return []
             return []
         
         self.mock_client._get.side_effect = mock_api_request
         
-        # Test expanding tags with aliases
-        expanded_tags, frequencies = self.expander.expand_tags(["cat"])
+        # Test expanding tags with aliases (feline -> cat)
+        expanded_tags, frequencies = self.expander.expand_tags(["feline"])
         
-        # Should include both the original tag and its alias
-        expected_tags = {"cat", "feline"}
+        # Should include both the original tag and its alias target
+        expected_tags = {"feline", "cat"}
         self.assertEqual(expanded_tags, expected_tags)
         
         # Aliases should share the same frequency
-        self.assertEqual(frequencies["cat"], 1)
         self.assertEqual(frequencies["feline"], 1)
+        self.assertEqual(frequencies["cat"], 1)
 
     def test_expand_tags_multiple_input(self):
         """Test expanding multiple input tags."""
@@ -248,39 +244,35 @@ class TestTagExpanderCore(unittest.TestCase):
                 return [{"name": params["search[name]"], "is_deprecated": False}]
             elif endpoint == "tag_implications.json":
                 return []  # No implications for simplicity
-            elif endpoint == "tags.json" and "search[name_matches]" in params:
-                tag_name = params["search[name_matches]"]
-                if tag_name == "cat":
-                    return [{
-                        "name": "cat",
-                        "consequent_aliases": [
-                            {"antecedent_name": "feline", "status": "active"}
-                        ]
-                    }]
-                elif tag_name == "feline":
-                    return [{
-                        "name": "feline", 
-                        "consequent_aliases": [
-                            {"antecedent_name": "kitty", "status": "active"}
-                        ]
-                    }]
-                return [{"name": tag_name, "consequent_aliases": []}]
+            elif endpoint == "tag_aliases.json":
+                # Use correct directed alias API format
+                antecedent = params.get("search[antecedent_name]")
+                if antecedent == "feline":
+                    return [{"antecedent_name": "feline", "consequent_name": "cat", "status": "active"}]
+                elif antecedent == "kitty":
+                    return [{"antecedent_name": "kitty", "consequent_name": "cat", "status": "active"}]
+                return []
             return []
         
         self.mock_client._get.side_effect = mock_api_request
         
-        # First populate the cache
-        self.expander.expand_tags(["cat"])
+        # First populate the cache with directed aliases: feline -> cat, kitty -> cat
+        self.expander.expand_tags(["feline", "kitty", "cat"])
         
-        # Test direct aliases
-        aliases = self.expander.get_aliases("cat")
-        self.assertEqual(aliases, ["feline"])
+        # Test direct aliases (outgoing: antecedent -> consequent)
+        feline_aliases = self.expander.get_aliases("feline")
+        self.assertEqual(feline_aliases, ["cat"])
+        
+        # Canonical tags should have no outgoing aliases
+        cat_aliases = self.expander.get_aliases("cat")
+        self.assertEqual(cat_aliases, [])
         
         # Test alias group (should include all transitively connected aliases)
-        alias_group = self.expander.get_alias_group("cat")
-        # The alias group should include cat itself and all its transitive aliases
-        self.assertIn("cat", alias_group)
+        alias_group = self.expander.get_alias_group("feline")
+        # The alias group should include all tags connected through alias relationships
         self.assertIn("feline", alias_group)
+        self.assertIn("cat", alias_group)
+        self.assertIn("kitty", alias_group)
 
     def test_get_semantic_relations_comprehensive(self):
         """Test the comprehensive semantic relations method."""
@@ -294,40 +286,38 @@ class TestTagExpanderCore(unittest.TestCase):
                 elif tag_name == "cat":
                     return [{"antecedent_name": "cat", "consequent_name": "animal", "status": "active"}]
                 return []
-            elif endpoint == "tags.json" and "search[name_matches]" in params:
-                tag_name = params["search[name_matches]"]
-                if tag_name == "kitten":
-                    return [{
-                        "name": "kitten",
-                        "consequent_aliases": [
-                            {"antecedent_name": "baby_cat", "status": "active"}
-                        ]
-                    }]
-                return [{"name": tag_name, "consequent_aliases": []}]
+            elif endpoint == "tag_aliases.json":
+                # Use correct directed alias API format
+                antecedent = params.get("search[antecedent_name]")
+                if antecedent == "baby_cat":
+                    return [{"antecedent_name": "baby_cat", "consequent_name": "kitten", "status": "active"}]
+                return []
             return []
         
         self.mock_client._get.side_effect = mock_api_request
         
         # First populate the cache
-        self.expander.expand_tags(["kitten"])
+        self.expander.expand_tags(["baby_cat", "kitten"])
         
-        # Test comprehensive semantic relations
-        relations = self.expander.get_semantic_relations("kitten")
+        # Test comprehensive semantic relations for baby_cat (deprecated tag)
+        relations = self.expander.get_semantic_relations("baby_cat")
         
-        # Check structure
+        # Check structure includes new directed alias fields
         expected_keys = {'direct_implications', 'transitive_implications', 
-                        'direct_aliases', 'alias_group', 'all_related'}
+                        'direct_aliases', 'aliased_from', 'alias_group', 
+                        'is_canonical', 'all_related'}
         self.assertEqual(set(relations.keys()), expected_keys)
         
-        # Check content
-        self.assertEqual(relations['direct_implications'], ["cat"])
-        self.assertEqual(relations['transitive_implications'], {"cat", "animal"})
-        self.assertEqual(relations['direct_aliases'], ["baby_cat"])
-        self.assertIn("kitten", relations['alias_group'])
+        # Check content for deprecated tag
+        self.assertEqual(relations['direct_implications'], [])           # no direct implications
+        self.assertEqual(relations['direct_aliases'], ["kitten"])        # aliases to kitten
+        self.assertEqual(relations['aliased_from'], [])                  # nothing aliases to baby_cat
+        self.assertFalse(relations['is_canonical'])                      # baby_cat is deprecated
         self.assertIn("baby_cat", relations['alias_group'])
+        self.assertIn("kitten", relations['alias_group'])
         
-        # all_related should contain transitive implications and alias group (minus original tag)
-        expected_related = {"cat", "animal", "baby_cat"}
+        # all_related should contain alias targets
+        expected_related = {"kitten"}  # baby_cat aliases to kitten
         self.assertEqual(relations['all_related'], expected_related)
 
     def test_is_tag_cached(self):
@@ -368,6 +358,115 @@ class TestTagExpanderCore(unittest.TestCase):
             ('get_alias_group', ["test"]),
             ('get_semantic_relations', ["test"]),
             ('is_tag_cached', ["test"])
+        ]
+        
+        for method_name, args in methods_to_test:
+            with self.subTest(method=method_name):
+                method = getattr(expander_no_cache, method_name)
+                with self.assertRaises(RuntimeError) as context:
+                    method(*args)
+                self.assertIn("Graph cache is not enabled", str(context.exception))
+
+    def test_directed_alias_functionality(self):
+        """Test the new directed alias functionality."""
+        def mock_api_request(endpoint, params):
+            if endpoint == "tags.json" and "search[name]" in params:
+                return [{"name": params["search[name]"], "is_deprecated": False}]
+            elif endpoint == "tag_implications.json":
+                return []  # No implications for simplicity
+            elif endpoint == "tag_aliases.json":
+                # Mock directed alias relationships
+                antecedent = params.get("search[antecedent_name]")
+                if antecedent == "ugly_man":
+                    return [{"antecedent_name": "ugly_man", "consequent_name": "ugly_bastard", "status": "active"}]
+                elif antecedent == "old_tag":
+                    return [{"antecedent_name": "old_tag", "consequent_name": "new_tag", "status": "active"}]
+                return []
+            return []
+        
+        self.mock_client._get.side_effect = mock_api_request
+        
+        # Populate cache with directed alias relationships
+        self.expander.expand_tags(["ugly_man", "ugly_bastard", "old_tag", "new_tag"])
+        
+        # Test outgoing aliases (antecedent -> consequent)
+        outgoing_aliases = self.expander.get_aliases("ugly_man")
+        self.assertEqual(outgoing_aliases, ["ugly_bastard"])
+        
+        # Canonical tags should have no outgoing aliases
+        canonical_aliases = self.expander.get_aliases("ugly_bastard")
+        self.assertEqual(canonical_aliases, [])
+        
+        # Test incoming aliases (what aliases TO this tag)
+        incoming_aliases = self.expander.get_aliased_from("ugly_bastard")
+        self.assertEqual(incoming_aliases, ["ugly_man"])
+        
+        # Deprecated tags should have no incoming aliases
+        no_incoming = self.expander.get_aliased_from("ugly_man")
+        self.assertEqual(no_incoming, [])
+        
+        # Test canonical status
+        self.assertFalse(self.expander.is_canonical("ugly_man"))      # antecedent (deprecated)
+        self.assertTrue(self.expander.is_canonical("ugly_bastard"))   # consequent (canonical)
+        self.assertFalse(self.expander.is_canonical("old_tag"))       # antecedent (deprecated)
+        self.assertTrue(self.expander.is_canonical("new_tag"))        # consequent (canonical)
+
+    def test_updated_semantic_relations_with_directed_aliases(self):
+        """Test that get_semantic_relations includes the new directed alias information."""
+        def mock_api_request(endpoint, params):
+            if endpoint == "tags.json" and "search[name]" in params:
+                return [{"name": params["search[name]"], "is_deprecated": False}]
+            elif endpoint == "tag_implications.json":
+                antecedent = params.get("search[antecedent_name]")
+                if antecedent == "deprecated_tag":
+                    return [{"antecedent_name": "deprecated_tag", "consequent_name": "implied_tag", "status": "active"}]
+                return []
+            elif endpoint == "tag_aliases.json":
+                antecedent = params.get("search[antecedent_name]")
+                if antecedent == "deprecated_tag":
+                    return [{"antecedent_name": "deprecated_tag", "consequent_name": "canonical_tag", "status": "active"}]
+                return []
+            return []
+        
+        self.mock_client._get.side_effect = mock_api_request
+        
+        # Populate cache
+        self.expander.expand_tags(["deprecated_tag", "canonical_tag"])
+        
+        # Test semantic relations for deprecated tag
+        relations = self.expander.get_semantic_relations("deprecated_tag")
+        
+        # Check structure includes new fields
+        expected_keys = {'direct_implications', 'transitive_implications', 
+                        'direct_aliases', 'aliased_from', 'alias_group', 
+                        'is_canonical', 'all_related'}
+        self.assertEqual(set(relations.keys()), expected_keys)
+        
+        # Check directed alias content
+        self.assertEqual(relations['direct_aliases'], ["canonical_tag"])  # outgoing
+        self.assertEqual(relations['aliased_from'], [])                   # incoming (none)
+        self.assertFalse(relations['is_canonical'])                       # deprecated tag
+        
+        # Test semantic relations for canonical tag
+        canonical_relations = self.expander.get_semantic_relations("canonical_tag")
+        self.assertEqual(canonical_relations['direct_aliases'], [])                    # no outgoing
+        self.assertEqual(canonical_relations['aliased_from'], ["deprecated_tag"])      # incoming
+        self.assertTrue(canonical_relations['is_canonical'])                           # canonical tag
+
+    def test_directed_alias_methods_without_cache_raise_error(self):
+        """Test that new directed alias methods raise error when cache is disabled."""
+        # Create expander without cache
+        with patch('danbooru_tag_expander.utils.tag_expander.Danbooru', return_value=self.mock_client):
+            expander_no_cache = TagExpander(
+                username="test", 
+                api_key="test", 
+                use_cache=False
+            )
+        
+        # New directed alias methods should raise RuntimeError
+        methods_to_test = [
+            ('get_aliased_from', ["test"]),
+            ('is_canonical', ["test"])
         ]
         
         for method_name, args in methods_to_test:
