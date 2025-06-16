@@ -3,11 +3,12 @@
 import unittest
 import tempfile
 import shutil
+import pytest
 from unittest.mock import patch, MagicMock
 from collections import Counter
 from danbooru_tag_expander import TagExpander
 
-
+@pytest.mark.unit
 class TestTagExpanderCore(unittest.TestCase):
     """Test cases for the core TagExpander functionality."""
 

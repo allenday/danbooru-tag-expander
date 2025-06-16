@@ -37,7 +37,7 @@ dependencies = [
     "requests>=2.26.0",
     "tqdm>=4.62.0",
     "pybooru>=4.2.2",
-    "danbooru-tag-graph>=0.2.1",
+    "danbooru-tag-graph>=0.2.2",
 ]
 
 [project.optional-dependencies]
